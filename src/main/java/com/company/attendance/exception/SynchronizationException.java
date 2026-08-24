@@ -1,0 +1,8 @@
+package com.company.attendance.exception;
+
+public class SynchronizationException extends RuntimeException {
+
+    public SynchronizationException(String message, Throwable cause) {
+        super(message, cause);
+    }
+}
