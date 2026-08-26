@@ -21,6 +21,8 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
+import java.time.LocalDateTime;
+
 @Getter
 @Setter
 @Builder
@@ -56,4 +58,11 @@ public class Anomaly {
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 20)
     private AnomalyStatus status = AnomalyStatus.ACTIVE;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "status_updated_by")
+    private User statusUpdatedBy;
+
+    @Column(name = "status_updated_at")
+    private LocalDateTime statusUpdatedAt;
 }

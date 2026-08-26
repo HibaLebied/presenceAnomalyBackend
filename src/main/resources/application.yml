@@ -76,6 +76,10 @@ attendance:
   synchronization:
     batch-size: 500
 
+security:
+  jwt:
+    secret: ${JWT_SECRET}
+
 app:
   cors:
     allowed-origins:
