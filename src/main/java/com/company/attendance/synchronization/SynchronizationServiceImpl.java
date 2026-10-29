@@ -4,6 +4,7 @@ import com.company.attendance.dto.SynchronizationStatusDTO;
 import com.company.attendance.detection.service.AttendanceAnomalyDetectionService;
 import com.company.attendance.entity.dashboard.AttendanceRecord;
 import com.company.attendance.entity.dashboard.SynchronizationHistory;
+import com.company.attendance.entity.dashboard.SynchronizationStatus;
 import com.company.attendance.entity.source.HrAnomalyView;
 import com.company.attendance.exception.SynchronizationAlreadyRunningException;
 import com.company.attendance.exception.SynchronizationException;
@@ -13,7 +14,6 @@ import com.company.attendance.repository.source.SourceAttendanceViewRepository;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Slice;
 import org.springframework.core.task.TaskRejectedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -23,6 +23,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -39,6 +40,7 @@ public class SynchronizationServiceImpl implements SynchronizationService {
     private final AttendanceAnomalyDetectionService attendanceAnomalyDetectionService;
     private final PlatformTransactionManager dashboardTransactionManager;
     private final Executor synchronizationTaskExecutor;
+    private final AtomicBoolean synchronizationInProgress = new AtomicBoolean(false);
     private final int batchSize;
 
     public SynchronizationServiceImpl(
@@ -63,27 +65,40 @@ public class SynchronizationServiceImpl implements SynchronizationService {
 
     @Override
     public SynchronizationStatusDTO startSynchronization() {
-        LocalDateTime startTime = LocalDateTime.now();
-        synchronizationHistoryService.findRunningSynchronization()
-                .ifPresent(running -> {
-                    throw new SynchronizationAlreadyRunningException(
-                            "A synchronization is already running with id: " + running.getId()
-                    );
-        });
-
-        SynchronizationHistory history = synchronizationHistoryService.startSynchronization(startTime);
-        try {
-            synchronizationTaskExecutor.execute(() -> runSynchronizationJob(history.getId(), startTime));
-        } catch (TaskRejectedException exception) {
-            synchronizationHistoryService.markFailed(
-                    history.getId(),
-                    LocalDateTime.now(),
-                    "Synchronization task executor rejected the job"
+        if (!synchronizationInProgress.compareAndSet(false, true)) {
+            throw new SynchronizationAlreadyRunningException(
+                    "A synchronization is already running in this application instance"
             );
-            throw new SynchronizationException("Unable to start attendance synchronization", exception);
         }
 
-        return toStatusDTO(history);
+        LocalDateTime startTime = LocalDateTime.now();
+        try {
+            synchronizationHistoryService.findRunningSynchronization()
+                    .ifPresent(running -> {
+                        synchronizationInProgress.set(false);
+                        throw new SynchronizationAlreadyRunningException(
+                                "A synchronization is already running with id: " + running.getId()
+                        );
+                    });
+
+            SynchronizationHistory history = synchronizationHistoryService.startSynchronization(startTime);
+            try {
+                synchronizationTaskExecutor.execute(() -> runSynchronizationJob(history.getId(), startTime));
+            } catch (TaskRejectedException exception) {
+                synchronizationHistoryService.markFailed(
+                        history.getId(),
+                        LocalDateTime.now(),
+                        "Synchronization task executor rejected the job"
+                );
+                synchronizationInProgress.set(false);
+                throw new SynchronizationException("Unable to start attendance synchronization", exception);
+            }
+
+            return toStatusDTO(history);
+        } catch (RuntimeException exception) {
+            synchronizationInProgress.set(false);
+            throw exception;
+        }
     }
 
     @Override
@@ -94,24 +109,38 @@ public class SynchronizationServiceImpl implements SynchronizationService {
     private void runSynchronizationJob(Long synchronizationId, LocalDateTime startTime) {
         log.info("Attendance synchronization {} started with batch size {}", synchronizationId, batchSize);
         try {
-            LocalDateTime previousLastSyncTime = synchronizationHistoryService.findLastSuccessfulSynchronization()
-                    .map(SynchronizationHistory::getLastSyncTime)
+            SynchronizationHistory previousSynchronization = synchronizationHistoryService
+                    .findLastSuccessfulSynchronization()
                     .orElse(null);
 
-            SynchronizationExecution execution = synchronizeInBatches(synchronizationId, previousLastSyncTime, startTime);
+            LocalDateTime previousLastSyncTime = previousSynchronization == null
+                    ? null
+                    : previousSynchronization.getLastSyncTime();
+
+            SourceCursor initialCursor = SourceCursor.from(previousSynchronization);
+
+            SynchronizationExecution execution = synchronizeInBatches(
+                    synchronizationId,
+                    previousLastSyncTime,
+                    startTime,
+                    initialCursor
+            );
 
             LocalDateTime endTime = LocalDateTime.now();
             synchronizationHistoryService.markSuccess(
                     synchronizationId,
                     endTime,
                     execution.lastSyncTime(),
+                    execution.cursor().matricule(),
+                    execution.cursor().dtPointage(),
                     execution.recordsInserted(),
                     execution.recordsUpdated()
             );
 
             log.info(
-                    "Attendance synchronization {} completed. inserted={}, updated={}",
+                    "Attendance synchronization {} completed. read={}, inserted={}, updated={}",
                     synchronizationId,
+                    execution.recordsRead(),
                     execution.recordsInserted(),
                     execution.recordsUpdated()
             );
@@ -122,31 +151,44 @@ public class SynchronizationServiceImpl implements SynchronizationService {
                     exception.getMessage()
             );
             log.error("Attendance synchronization {} failed", synchronizationId, exception);
+        } finally {
+            synchronizationInProgress.set(false);
         }
     }
 
     private SynchronizationExecution synchronizeInBatches(
             Long synchronizationId,
             LocalDateTime previousLastSyncTime,
-            LocalDateTime synchronizationBoundary
+            LocalDateTime synchronizationBoundary,
+            SourceCursor initialCursor
     ) {
         int pageNumber = 0;
+        int totalRead = 0;
         int totalInserted = 0;
         int totalUpdated = 0;
         LocalDateTime lastSyncTime = previousLastSyncTime;
+        SourceCursor cursor = initialCursor;
 
-        Slice<HrAnomalyView> sourcePage;
+        List<HrAnomalyView> sourceBatch;
         do {
-            sourcePage = loadSourceRecordsBatch(previousLastSyncTime, synchronizationBoundary, pageNumber);
+            sourceBatch = loadSourceRecordsBatch(
+                    previousLastSyncTime,
+                    synchronizationBoundary,
+                    cursor
+            );
 
-            if (!sourcePage.isEmpty()) {
-                SynchronizationExecution batchExecution = synchronizeBatch(sourcePage.getContent());
+            if (!sourceBatch.isEmpty()) {
+                SynchronizationExecution batchExecution = synchronizeBatch(sourceBatch);
+                totalRead += batchExecution.recordsRead();
                 totalInserted += batchExecution.recordsInserted();
                 totalUpdated += batchExecution.recordsUpdated();
                 lastSyncTime = batchExecution.lastSyncTime();
+                cursor = SourceCursor.from(sourceBatch.get(sourceBatch.size() - 1));
                 synchronizationHistoryService.markProgress(
                         synchronizationId,
                         lastSyncTime,
+                        cursor.matricule(),
+                        cursor.dtPointage(),
                         totalInserted,
                         totalUpdated
                 );
@@ -154,7 +196,7 @@ public class SynchronizationServiceImpl implements SynchronizationService {
                         "Attendance synchronization {} batch {} completed. batchSize={}, totalInserted={}, totalUpdated={}, lastSyncTime={}",
                         synchronizationId,
                         pageNumber + 1,
-                        sourcePage.getNumberOfElements(),
+                        batchExecution.recordsRead(),
                         totalInserted,
                         totalUpdated,
                         lastSyncTime
@@ -162,33 +204,29 @@ public class SynchronizationServiceImpl implements SynchronizationService {
             }
 
             pageNumber++;
-        } while (sourcePage.hasNext());
+        } while (sourceBatch.size() == batchSize);
 
         return new SynchronizationExecution(
+                totalRead,
                 totalInserted,
                 totalUpdated,
-                lastSyncTime
+                lastSyncTime,
+                cursor
         );
     }
 
-    private Slice<HrAnomalyView> loadSourceRecordsBatch(
+    private List<HrAnomalyView> loadSourceRecordsBatch(
             LocalDateTime previousLastSyncTime,
             LocalDateTime synchronizationBoundary,
-            int pageNumber
+            SourceCursor cursor
     ) {
-        PageRequest pageRequest = PageRequest.of(pageNumber, batchSize);
-
-        if (previousLastSyncTime == null) {
-            return sourceAttendanceViewRepository.findByUpdatedAtLessThanEqualOrderByUpdatedAtAsc(
-                    synchronizationBoundary,
-                    pageRequest
-            );
-        }
-
-        return sourceAttendanceViewRepository.findByUpdatedAtAfterAndUpdatedAtLessThanEqualOrderByUpdatedAtAsc(
-                previousLastSyncTime,
-                synchronizationBoundary,
-                pageRequest
+        return sourceAttendanceViewRepository.findNextBatch(
+            previousLastSyncTime,
+            synchronizationBoundary,
+            cursor.updatedAt(),
+            cursor.matricule(),
+            cursor.dtPointage(),
+            PageRequest.of(0, batchSize)
         );
     }
 
@@ -216,9 +254,11 @@ public class SynchronizationServiceImpl implements SynchronizationService {
             attendanceAnomalyDetectionService.detectForRecords(savedRecords);
 
             return new SynchronizationExecution(
+                    sourceRecords.size(),
                     inserted.get(),
                     updated.get(),
-                    resolveBatchLastSyncTime(sourceRecords)
+                    resolveBatchLastSyncTime(sourceRecords),
+                    SourceCursor.empty()
             );
         });
     }
@@ -275,9 +315,45 @@ public class SynchronizationServiceImpl implements SynchronizationService {
     }
 
     private record SynchronizationExecution(
+            int recordsRead,
             int recordsInserted,
             int recordsUpdated,
-            LocalDateTime lastSyncTime
+            LocalDateTime lastSyncTime,
+            SourceCursor cursor
     ) {
+    }
+
+    private record SourceCursor(
+            LocalDateTime updatedAt,
+            String matricule,
+            LocalDateTime dtPointage
+    ) {
+        private static SourceCursor empty() {
+            return new SourceCursor(null, null, null);
+        }
+
+        private static SourceCursor from(SynchronizationHistory history) {
+            if (history == null
+                    || history.getStatus() != SynchronizationStatus.PARTIAL_SUCCESS
+                    || history.getLastSyncTime() == null
+                    || history.getLastSyncMatricule() == null
+                    || history.getLastSyncDtPointage() == null) {
+                return empty();
+            }
+
+            return new SourceCursor(
+                    history.getLastSyncTime(),
+                    history.getLastSyncMatricule(),
+                    history.getLastSyncDtPointage()
+            );
+        }
+
+        private static SourceCursor from(HrAnomalyView sourceRecord) {
+            return new SourceCursor(
+                    sourceRecord.getUpdatedAt(),
+                    sourceRecord.getMatricule(),
+                    sourceRecord.getDtPointageDateTime()
+            );
+        }
     }
 }

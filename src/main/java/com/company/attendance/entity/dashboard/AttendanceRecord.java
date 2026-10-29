@@ -75,7 +75,7 @@ public class AttendanceRecord {
     @Column(name = "HIERARCHIE", nullable = false)
     private Integer hierarchie;
 
-    @Size(max = 1)
+    @Size(max = 3)
     @Column(name = "TYPE_JOUR", length = 1)
     private String typeJour;
 

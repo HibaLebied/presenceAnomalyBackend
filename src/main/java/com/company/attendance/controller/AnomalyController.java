@@ -35,6 +35,7 @@ public class AnomalyController {
     @GetMapping
     public PageResponse<AnomalyResponse> findAll(
             @RequestParam(required = false)
+
             @Size(max = 64)
             String employeeId,
 

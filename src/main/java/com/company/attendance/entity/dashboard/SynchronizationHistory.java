@@ -42,6 +42,12 @@ public class SynchronizationHistory {
     @Column(name = "last_sync_time")
     private LocalDateTime lastSyncTime;
 
+    @Column(name = "last_sync_matricule", length = 50)
+    private String lastSyncMatricule;
+
+    @Column(name = "last_sync_dt_pointage")
+    private LocalDateTime lastSyncDtPointage;
+
     @NotNull
     @Min(0)
     @Column(name = "records_inserted", nullable = false)

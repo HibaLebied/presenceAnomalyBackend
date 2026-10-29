@@ -2,8 +2,10 @@ package com.company.attendance.service.impl;
 
 import com.company.attendance.dto.AnomalyResponse;
 import com.company.attendance.dto.AnomalySearchCriteria;
+import com.company.attendance.entity.dashboard.UserRole;
 import com.company.attendance.mapper.AnomalyContractMapper;
 import com.company.attendance.repository.dashboard.AnomalyRepository;
+import com.company.attendance.security.service.CurrentUserService;
 import com.company.attendance.service.AnomalyQueryService;
 import com.company.attendance.util.HrPeriod;
 import com.company.attendance.util.HrPeriodResolver;
@@ -21,11 +23,13 @@ public class AnomalyQueryServiceImpl implements AnomalyQueryService {
     private final AnomalyRepository anomalyRepository;
     private final AnomalyContractMapper anomalyContractMapper;
     private final HrPeriodResolver hrPeriodResolver;
+    private final CurrentUserService currentUserService;
 
     @Override
     @Transactional(transactionManager = "dashboardTransactionManager", readOnly = true)
     public Page<AnomalyResponse> findAll(AnomalySearchCriteria criteria, Pageable pageable) {
         HrPeriod period = hrPeriodResolver.resolve(criteria.year(), criteria.month());
+        boolean includeIgnored = criteria.includeIgnored() && currentUserService.hasRole(UserRole.ADMIN_RH);
 
         return anomalyRepository.searchAnomalies(
                         TextUtils.trimToNull(criteria.employeeId()),
@@ -35,7 +39,7 @@ public class AnomalyQueryServiceImpl implements AnomalyQueryService {
                         period.startDate(),
                         period.endDate(),
                         criteria.hierarchy(),
-                        criteria.includeIgnored(),
+                        includeIgnored,
                         pageable
                 )
                 .map(anomalyContractMapper::toResponse);

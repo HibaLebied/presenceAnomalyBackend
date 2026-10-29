@@ -1,23 +1,20 @@
 package com.company.attendance.security;
 
 import com.company.attendance.security.jwt.JwtAuthenticationFilter;
-
+import com.company.attendance.security.service.CustomUserDetailsService;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
-
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-
+import org.springframework.http.HttpMethod;
 import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.AuthenticationProvider;
+import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
+import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
-
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
-
 import org.springframework.security.config.http.SessionCreationPolicy;
-
-import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
-
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 
@@ -27,86 +24,71 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
+    private final CustomUserDetailsService customUserDetailsService;
+    private final PasswordEncoder passwordEncoder;
 
     @Bean
     public SecurityFilterChain securityFilterChain(
             org.springframework.security.config.annotation.web.builders.HttpSecurity http
     ) throws Exception {
-
         http
-                // API REST → pas de CSRF
+                .cors(Customizer.withDefaults())
                 .csrf(csrf -> csrf.disable())
-
-                // JWT → pas de session
-                .sessionManagement(session ->
-                        session.sessionCreationPolicy(
-                                SessionCreationPolicy.STATELESS
-                        )
-                )
+                .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .authenticationProvider(authenticationProvider())
 
                 .authorizeHttpRequests(auth -> auth
-
-                        // Public
-                        .requestMatchers("/auth/**").permitAll()
-
-                        // Admin RH uniquement
-                        .requestMatchers("synchronization/**",
-                                "anomalies/*/ignore",
-                                "anomalies/*/activate")
-                        .hasRole("ADMIN_RH")
-                        // Admin RH + Manager
+                        .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                         .requestMatchers(
+                                "/auth/login",
+                                "/auth/refresh",
+                                "/auth/logout",
+                                "/actuator/health",
+                                "/v3/api-docs/**",
+                                "/swagger-ui/**",
+                                "/swagger-ui.html"
+                        ).permitAll()
+
+                        .requestMatchers(
+                                "/synchronization/**",
+                                "/anomalies/*/ignore",
+                                "/anomalies/*/activate"
+                        ).hasRole("ADMIN_RH")
+
+                        .requestMatchers(
+                                "/auth/me",
                                 "/anomalies/**",
                                 "/dashboard/**",
                                 "/departments/**",
                                 "/supervisors/**",
                                 "/filters/**"
-                        )
-                        .hasAnyRole("ADMIN_RH", "MANAGER")
+                        ).hasAnyRole("ADMIN_RH", "MANAGER")
 
-                        // Tout le reste doit être authentifié
-                        .anyRequest()
-                        .authenticated()
+
+                        .anyRequest().authenticated()
                 )
                 .exceptionHandling(exception -> exception
-
-                        .authenticationEntryPoint(
-                                (request, response, authException) ->
-                                        response.sendError(
-                                                HttpServletResponse.SC_UNAUTHORIZED,
-                                                "Unauthorized"
-                                        )
-                        )
-
-                        .accessDeniedHandler(
-                                (request, response, accessDeniedException) ->
-                                        response.sendError(
-                                                HttpServletResponse.SC_FORBIDDEN,
-                                                "Forbidden"
-                                        )
-                        )
+                        .authenticationEntryPoint((request, response, authException) ->
+                                response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Unauthorized"))
+                        .accessDeniedHandler((request, response, accessDeniedException) ->
+                                response.sendError(HttpServletResponse.SC_FORBIDDEN, "Forbidden"))
                 )
-                // Notre filtre JWT doit être exécuté
-                // avant le filtre UsernamePasswordAuthenticationFilter
-                .addFilterBefore(
-                        jwtAuthenticationFilter,
-                        UsernamePasswordAuthenticationFilter.class
-                );
+
+                .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
 
         return http.build();
     }
 
     @Bean
-    public PasswordEncoder passwordEncoder() {
-
-        return new BCryptPasswordEncoder();
+    public AuthenticationProvider authenticationProvider() {
+        DaoAuthenticationProvider provider = new DaoAuthenticationProvider();
+        provider.setUserDetailsService(customUserDetailsService);
+        provider.setPasswordEncoder(passwordEncoder);
+        return provider;
     }
 
     @Bean
-    public AuthenticationManager authenticationManager(
-            AuthenticationConfiguration configuration
-    ) throws Exception {
-
+    public AuthenticationManager authenticationManager(AuthenticationConfiguration configuration) throws Exception {
         return configuration.getAuthenticationManager();
     }
 }

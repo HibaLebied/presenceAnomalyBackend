@@ -9,24 +9,38 @@ import java.util.List;
 public class AuthenticatedUser implements UserDetails {
 
     private final Long id;
+    private final String fullName;
     private final String email;
     private final String password;
     private final String role;
+    private final boolean active;
 
     public AuthenticatedUser(
             Long id,
+            String fullName,
             String email,
             String password,
-            String role
+            String role,
+            boolean active
     ) {
         this.id = id;
+        this.fullName = fullName;
         this.email = email;
         this.password = password;
         this.role = role;
+        this.active = active;
     }
 
     public Long getId() {
         return id;
+    }
+
+    public String getFullName() {
+        return fullName;
+    }
+
+    public String getEmail() {
+        return email;
     }
 
     public String getRole() {
@@ -35,9 +49,7 @@ public class AuthenticatedUser implements UserDetails {
 
     @Override
     public Collection<? extends GrantedAuthority> getAuthorities() {
-        return List.of(() ->
-                "ROLE_" + role
-        );
+        return List.of(() -> "ROLE_" + role);
     }
 
     @Override
@@ -67,6 +79,6 @@ public class AuthenticatedUser implements UserDetails {
 
     @Override
     public boolean isEnabled() {
-        return true;
+        return active;
     }
 }

@@ -79,10 +79,14 @@ attendance:
 security:
   jwt:
     secret: ${JWT_SECRET}
-
+    expiration-ms: ${JWT_EXPIRATION_MS:900000}
+  refresh-token:
+    expiration-ms: ${REFRESH_TOKEN_EXPIRATION_MS:28800000}
+    cookie-path: ${REFRESH_TOKEN_COOKIE_PATH:/api/auth}
+    secure: ${REFRESH_TOKEN_COOKIE_SECURE:false}
+    same-site: ${REFRESH_TOKEN_COOKIE_SAME_SITE:Lax}
 app:
   cors:
     allowed-origins:
       - http://localhost:5173
-
 

@@ -79,6 +79,8 @@ public class SynchronizationHistoryService {
     public SynchronizationHistory markProgress(
             Long synchronizationId,
             LocalDateTime lastSyncTime,
+            String lastSyncMatricule,
+            LocalDateTime lastSyncDtPointage,
             int recordsInserted,
             int recordsUpdated
     ) {
@@ -86,6 +88,8 @@ public class SynchronizationHistoryService {
                 .orElseThrow(() -> new IllegalStateException("Synchronization history not found: " + synchronizationId));
 
         history.setLastSyncTime(lastSyncTime);
+        history.setLastSyncMatricule(lastSyncMatricule);
+        history.setLastSyncDtPointage(lastSyncDtPointage);
         history.setRecordsInserted(recordsInserted);
         history.setRecordsUpdated(recordsUpdated);
 
@@ -97,6 +101,8 @@ public class SynchronizationHistoryService {
             Long synchronizationId,
             LocalDateTime endTime,
             LocalDateTime lastSyncTime,
+            String lastSyncMatricule,
+            LocalDateTime lastSyncDtPointage,
             int recordsInserted,
             int recordsUpdated
     ) {
@@ -105,6 +111,8 @@ public class SynchronizationHistoryService {
 
         history.setEndTime(endTime);
         history.setLastSyncTime(lastSyncTime);
+        history.setLastSyncMatricule(lastSyncMatricule);
+        history.setLastSyncDtPointage(lastSyncDtPointage);
         history.setRecordsInserted(recordsInserted);
         history.setRecordsUpdated(recordsUpdated);
         history.setStatus(SynchronizationStatus.SUCCESS);
