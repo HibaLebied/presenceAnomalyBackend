@@ -113,6 +113,10 @@ public abstract class AbstractOvertimeRule extends AbstractAttendanceRule {
     }
 
     private ShiftWindow shiftWindowFor(String planning) {
+        if (planning == null || planning.isBlank()) {
+            return null;
+        }
+
         return switch (planning) {
             case "SH3" -> new ShiftWindow(15 * 3600, 23 * 3600, false);
             case "SH3B" -> new ShiftWindow(14 * 3600, 22 * 3600, false);
