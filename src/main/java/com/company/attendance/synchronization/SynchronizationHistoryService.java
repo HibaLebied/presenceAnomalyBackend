@@ -127,7 +127,9 @@ public class SynchronizationHistoryService {
                 .orElseThrow(() -> new IllegalStateException("Synchronization history not found: " + synchronizationId));
 
         history.setEndTime(endTime);
-        history.setStatus(SynchronizationStatus.FAILED);
+        history.setStatus(history.getLastSyncTime() == null
+                ? SynchronizationStatus.FAILED
+                : SynchronizationStatus.PARTIAL_SUCCESS);
         history.setErrorMessage(errorMessage);
 
         synchronizationHistoryRepository.save(history);
