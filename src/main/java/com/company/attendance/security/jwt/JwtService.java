@@ -2,8 +2,11 @@ package com.company.attendance.security.jwt;
 
 import com.company.attendance.security.AuthenticatedUser;
 import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.JwtException;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.stereotype.Service;
@@ -13,10 +16,13 @@ import java.nio.charset.StandardCharsets;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Objects;
 import java.util.function.Function;
 
 @Service
 public class JwtService {
+
+    private static final Logger log = LoggerFactory.getLogger(JwtService.class);
 
     private final SecretKey secretKey;
     private final long expirationTime;
@@ -51,8 +57,19 @@ public class JwtService {
     }
 
     public boolean isTokenValid(String token, UserDetails userDetails) {
-        String email = extractEmail(token);
-        return email.equals(userDetails.getUsername()) && !isTokenExpired(token);
+        if (token == null || token.isBlank() || userDetails == null) {
+            log.debug("JWT validation rejected: token or user details are missing");
+            return false;
+        }
+
+        try {
+            String email = extractEmail(token);
+            return Objects.equals(email, userDetails.getUsername())
+                    && !isTokenExpired(token);
+        } catch (JwtException | IllegalArgumentException exception) {
+            log.debug("JWT validation rejected: {}", exception.getClass().getSimpleName());
+            return false;
+        }
     }
 
     private boolean isTokenExpired(String token) {
